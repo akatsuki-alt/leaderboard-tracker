@@ -1,22 +1,19 @@
 from common.service import TaskedService, Task
-from common.api.server_api import ServerAPI
-from dataclasses import dataclass
+from tracker.tasks import *
 from typing import List
+from . import TrackerConfig
 
 import common.servers as servers
 
-@dataclass
-class TrackerConfig:
-    server_api: ServerAPI
-    additional_tasks: List[Task] = ()
-
-    def build_tasks(self) -> List[Task]:
-        return self.additional_tasks
+def build_tasks(config: TrackerConfig) -> List[Task]:
+    tasks = [TrackLiveLeaderboard(config)]
+    tasks.extend(config.additional_tasks)
+    return tasks
 
 class ServerTracker(TaskedService):
     
     def __init__(self, config: TrackerConfig, daemonize=False) -> None:
-        super().__init__(f"{config.server_api.server_name}_tracker_svc", config.build_tasks(), daemonize)
+        super().__init__(f"{config.server_api.server_name}_tracker_svc", build_tasks(config), daemonize)
 
 def get_services() -> List[TaskedService]:
     return [
