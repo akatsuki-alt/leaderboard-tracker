@@ -69,4 +69,8 @@ class TrackLiveLeaderboard(TrackerTask):
             return
         if not (dbuser := session.get(DBUser, (user.id, user.server))):
             app.events.trigger(NewUserDiscoveredEvent(user_full))
+        for stats in stats_full:
+            if stats.pp == 0:
+                continue
+            session.merge(stats.to_db())
         session.merge(user_full.to_db())
