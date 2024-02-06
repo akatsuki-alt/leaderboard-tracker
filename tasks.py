@@ -28,6 +28,7 @@ class TrackLiveLeaderboard(TrackerTask):
         if self.config.server_api.supports_rx:
             modes.extend(((0,1), (1,1), (2,1), (0,2)))
         with app.database.session as session:
+            users_updated = 0
             for mode, relax in modes:
                 old_lb = session.query(DBStatsCompact).filter(DBStatsCompact.server == self.config.server_api.server_name, DBStatsCompact.leaderboard_type == "pp", DBStatsCompact.mode == mode, DBStatsCompact.relax == relax).all()
                 old_lb_by_id = {}
@@ -58,9 +59,10 @@ class TrackLiveLeaderboard(TrackerTask):
                     if user.id in old_lb_by_id:
                         if old_lb_by_id[user.id].play_count != stats.play_count:
                             self.process_user_update(session, user, stats, mode, relax)
+                            users_updated+=1
                     session.add(stats.to_db_compact())
                 session.commit()
-        app.events.trigger(LeaderboardUpdateEvent(self.config.server_api.server_name))
+        app.events.trigger(LeaderboardUpdateEvent(self.config.server_api.server_name, users_updated))
         return True
 
     def process_user_update(self, session: Session, user: User, stats: Stats, mode: int, relax: int) -> None:

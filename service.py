@@ -17,5 +17,6 @@ class ServerTracker(TaskedService):
 
 def get_services() -> List[TaskedService]:
     return [
-        ServerTracker(TrackerConfig(server_api=servers.by_name("akatsuki")))
+        ServerTracker(TrackerConfig(server_api=servers.by_name("akatsuki"))),
+        ServerTracker(TrackerConfig(server_api=servers.by_name("titanic")))
     ]
