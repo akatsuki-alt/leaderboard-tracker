@@ -1,8 +1,10 @@
-from common.database.objects import DBStatsCompact
-from common.events import LeaderboardUpdateEvent
+from common.database.objects import DBStatsCompact, DBUser
 from common.api.server_api import Stats, User
 from common.service import RepeatedTask
 from common.logging import get_logger
+from common.events import *
+
+from sqlalchemy.orm import Session
 from typing import List, Tuple
 from . import TrackerConfig
 
@@ -28,8 +30,10 @@ class TrackLiveLeaderboard(TrackerTask):
         with app.database.session as session:
             for mode, relax in modes:
                 old_lb = session.query(DBStatsCompact).filter(DBStatsCompact.server == self.config.server_api.server_name, DBStatsCompact.leaderboard_type == "pp", DBStatsCompact.mode == mode, DBStatsCompact.relax == relax).all()
+                old_lb_by_id = {}
                 if old_lb:
                     for object in old_lb:
+                        old_lb_by_id[object.id] = object
                         session.delete(object)
                 live_lb: List[Tuple[User, Stats]] = list()
                 page = 1
@@ -51,7 +55,18 @@ class TrackLiveLeaderboard(TrackerTask):
                         self.logger.error(f"An error occurred while trying to fetch leaderboard!", exc_info=True)
                         return False
                 for user, stats in live_lb:
+                    if user.id in old_lb_by_id:
+                        if old_lb_by_id[user.id].play_count != stats.play_count:
+                            self.process_user_update(session, user, stats, mode, relax)
                     session.add(stats.to_db_compact())
                 session.commit()
         app.events.trigger(LeaderboardUpdateEvent(self.config.server_api.server_name))
         return True
+
+    def process_user_update(self, session: Session, user: User, stats: Stats, mode: int, relax: int) -> None:
+        user_full, stats_full = self.config.server_api.get_user_info(user.id)
+        if not user_full or not stats_full:
+            return
+        if not (dbuser := session.get(DBUser, (user.id, user.server))):
+            app.events.trigger(NewUserDiscoveredEvent(user_full))
+        session.merge(user_full.to_db())
