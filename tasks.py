@@ -1,4 +1,4 @@
-from common.database.objects import DBStatsCompact, DBUser
+from common.database.objects import DBStatsCompact, DBUser, DBScore
 from common.api.server_api import Stats, User
 from common.service import RepeatedTask
 from common.logging import get_logger
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from typing import List, Tuple
 from . import TrackerConfig
 
+import common.repos.beatmaps as beatmaps
 import common.app as app
 
 class TrackerTask(RepeatedTask):
@@ -60,7 +61,7 @@ class TrackLiveLeaderboard(TrackerTask):
                         if old_lb_by_id[user.id].play_count != stats.play_count:
                             self.process_user_update(session, user, stats, mode, relax)
                             users_updated+=1
-                    session.add(stats.to_db_compact())
+                    session.merge(stats.to_db_compact())
                 session.commit()
         app.events.trigger(LeaderboardUpdateEvent(self.config.server_api.server_name, users_updated))
         return True
@@ -76,3 +77,15 @@ class TrackLiveLeaderboard(TrackerTask):
                 continue
             session.merge(stats.to_db())
         session.merge(user_full.to_db())
+        for score in self.config.server_api.get_user_recent(user.id, mode, relax):
+            if session.query(DBScore).filter(
+                DBScore.id == score.id, 
+                DBScore.server == self.config.server_api.server_name
+            ).first():
+                break
+            if not beatmaps.get_beatmap(score.beatmap_id):
+                self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
+            else:
+                session.merge(score.to_db())
+            # TODO: Fix old statuses when changes
+        session.commit()
