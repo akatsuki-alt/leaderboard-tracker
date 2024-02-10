@@ -87,5 +87,17 @@ class TrackLiveLeaderboard(TrackerTask):
                 self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
             else:
                 session.merge(score.to_db())
-            # TODO: Fix old statuses when changes
+                if score.completed > 2:
+                    for db_score in session.query(DBScore).filter(
+                        DBScore.beatmap_id == score.beatmap_id, 
+                        DBScore.server == score.server,
+                        DBScore.user_id == score.user_id,
+                        DBScore.mode == score.mode,
+                        DBScore.relax == score.relax,
+                        DBScore.completed > 2
+                    ):
+                        if db_score.id == score.id:
+                            continue
+                        if db_score.completed == score.completed:
+                            db_score.completed = 2
         session.commit()
