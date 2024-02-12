@@ -104,7 +104,12 @@ class TrackLiveLeaderboard(TrackerTask):
                             continue
                         if db_score.completed == score.completed:
                             db_score.completed = 2
-                            
+        for hidden_score in session.query(DBScore).filter(
+            DBScore.user_id == score.user_id,
+            DBScore.server == score.server,
+            DBScore.hidden == True
+        ):
+            hidden_score.hidden = False
         session.merge(DBUserQueue(
             server = self.config.server_api.server_name,
             user_id = user_full.id,
@@ -123,10 +128,21 @@ class ProcessQueue(TrackerTask):
     def run(self):
         with app.database.session as session:
             for queue in session.query(DBUserQueue).filter(DBUserQueue.server==self.config.server_api.server_name, DBUserQueue.date < date.today()):
-                # TODO: check availability
                 user_info, stats = self.config.server_api.get_user_info(queue.user_id)
                 if not user_info or user_info.banned:
-                    # TODO: banned
+                    if self.config.server_api.ping_server():
+                        user = session.get(DBUser, (queue.user_id, queue.server))
+                        for score in session.query(DBScore).filter(
+                            DBScore.server == self.config.server_api.server_name,
+                            DBScore.user_id == queue.user_id,
+                        ):
+                            score.hidden = True
+                        if user:
+                            user.banned = True
+                        session.commit()
+                        app.events.trigger(BannedUserEvent(queue.user_id, queue.server, user))
+                    else:
+                        self.logger.warning("Server down?")
                     continue
                 session.merge(user_info.to_db())
                 for stat in stats:
