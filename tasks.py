@@ -2,6 +2,7 @@ from common.database.objects import DBStatsCompact, DBUserQueue, DBUser, DBScore
 from common.api.server_api import Stats, User
 from common.service import RepeatedTask
 from common.logging import get_logger
+from common.servers import ServerAPI
 from common.events import *
 
 from sqlalchemy.orm import Session
@@ -34,6 +35,8 @@ class TrackLiveLeaderboard(TrackerTask):
             for mode, relax in modes:
                 old_lb = session.query(DBStatsCompact).filter(DBStatsCompact.server == self.config.server_api.server_name, DBStatsCompact.leaderboard_type == "pp", DBStatsCompact.mode == mode, DBStatsCompact.relax == relax).all()
                 old_lb_by_id = {}
+                new_lb_by_id = {}
+
                 if old_lb:
                     for object in old_lb:
                         old_lb_by_id[object.id] = object
@@ -58,11 +61,20 @@ class TrackLiveLeaderboard(TrackerTask):
                         self.logger.error(f"An error occurred while trying to fetch leaderboard!", exc_info=True)
                         return False
                 for user, stats in live_lb:
+                    new_lb_by_id[user.id] = user
                     if user.id in old_lb_by_id:
                         if old_lb_by_id[user.id].play_count != stats.play_count:
                             self.process_user_update(session, user, stats, mode, relax)
                             users_updated+=1
                     session.merge(stats.to_db_compact())
+                
+                missing_users = {k:v for k,v in old_lb_by_id.items() if k not in new_lb_by_id}
+                
+                for user in missing_users.values():
+                    user_info, stats = self.config.server_api.get_user_info(user.id)
+                    if not user_info or user_info.banned:
+                        process_ban(self.config.server_api, session, user.id)
+
                 session.commit()
         app.events.trigger(LeaderboardUpdateEvent(self.config.server_api.server_name, users_updated))
         return True
@@ -131,16 +143,7 @@ class ProcessQueue(TrackerTask):
                 user_info, stats = self.config.server_api.get_user_info(queue.user_id)
                 if not user_info or user_info.banned:
                     if self.config.server_api.ping_server():
-                        user = session.get(DBUser, (queue.user_id, queue.server))
-                        for score in session.query(DBScore).filter(
-                            DBScore.server == self.config.server_api.server_name,
-                            DBScore.user_id == queue.user_id,
-                        ):
-                            score.hidden = True
-                        if user:
-                            user.banned = True
-                        session.commit()
-                        app.events.trigger(BannedUserEvent(queue.user_id, queue.server, user))
+                        process_ban(self.config.server_api, session, queue.user_id)
                     else:
                         self.logger.warning("Server down?")
                     continue
@@ -179,3 +182,16 @@ class ProcessQueue(TrackerTask):
                 session.delete(queue)
             session.commit()
         return True
+    
+def process_ban(server_api: ServerAPI, session: Session, user_id: int): 
+    if server_api.ping_server():
+        user = session.get(DBUser, (user_id, server_api.server_name))
+        for score in session.query(DBScore).filter(
+            DBScore.server == server_api.server_name,
+            DBScore.user_id == user_id,
+        ):
+            score.hidden = True
+            if user:
+                user.banned = True
+                session.commit()
+            app.events.trigger(BannedUserEvent(user_id, server_api.server_name, user))
