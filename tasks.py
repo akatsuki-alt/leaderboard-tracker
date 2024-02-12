@@ -117,8 +117,8 @@ class TrackLiveLeaderboard(TrackerTask):
                         if db_score.completed == score.completed:
                             db_score.completed = 2
         for hidden_score in session.query(DBScore).filter(
-            DBScore.user_id == score.user_id,
-            DBScore.server == score.server,
+            DBScore.user_id == user.id,
+            DBScore.server == user.server,
             DBScore.hidden == True
         ):
             hidden_score.hidden = False
