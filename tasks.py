@@ -1,4 +1,4 @@
-from common.database.objects import DBStatsCompact, DBUser, DBScore
+from common.database.objects import DBStatsCompact, DBUserQueue, DBUser, DBScore
 from common.api.server_api import Stats, User
 from common.service import RepeatedTask
 from common.logging import get_logger
@@ -7,6 +7,7 @@ from common.events import *
 from sqlalchemy.orm import Session
 from typing import List, Tuple
 from . import TrackerConfig
+from datetime import date
 
 import common.repos.beatmaps as beatmaps
 import common.app as app
@@ -15,6 +16,7 @@ class TrackerTask(RepeatedTask):
     
     def __init__(self, task_name: str, interval: int, config: TrackerConfig) -> None:
         self.config = config
+        self.logger = get_logger(f"{config.server_api.server_name}_{task_name}")
         super().__init__(f"{config.server_api.server_name}_{task_name}", interval)
 
 
@@ -22,7 +24,6 @@ class TrackLiveLeaderboard(TrackerTask):
 
     def __init__(self, config: TrackerConfig) -> None:
         super().__init__("live_lb_tracker", 60*15, config)
-        self.logger = get_logger(self.task_name)
     
     def run(self):
         modes = [(0,0), (1,0), (2,0), (3,0)]
@@ -68,15 +69,18 @@ class TrackLiveLeaderboard(TrackerTask):
 
     def process_user_update(self, session: Session, user: User, stats: Stats, mode: int, relax: int) -> None:
         user_full, stats_full = self.config.server_api.get_user_info(user.id)
+
         if not user_full or not stats_full:
             return
         if not (dbuser := session.get(DBUser, (user.id, user.server))):
             app.events.trigger(NewUserDiscoveredEvent(user_full))
+
         for stats in stats_full:
             if stats.pp == 0:
                 continue
             session.merge(stats.to_db())
         session.merge(user_full.to_db())
+
         for score in self.config.server_api.get_user_recent(user.id, mode, relax):
             if session.query(DBScore).filter(
                 DBScore.id == score.id, 
@@ -100,4 +104,62 @@ class TrackLiveLeaderboard(TrackerTask):
                             continue
                         if db_score.completed == score.completed:
                             db_score.completed = 2
+                            
+        session.merge(DBUserQueue(
+            server = self.config.server_api.server_name,
+            user_id = user_full.id,
+            mode = mode,
+            relax = relax,
+            date = date.today()
+        ))
+
         session.commit()
+        
+class ProcessQueue(TrackerTask):
+    
+    def __init__(self, config: TrackerConfig) -> None:
+        super().__init__("process_queue", 60*15, config)
+
+    def run(self):
+        with app.database.session as session:
+            for queue in session.query(DBUserQueue).filter(DBUserQueue.server==self.config.server_api.server_name, DBUserQueue.date < date.today()):
+                # TODO: check availability
+                user_info, stats = self.config.server_api.get_user_info(queue.user_id)
+                if not user_info or user_info.banned:
+                    # TODO: banned
+                    continue
+                session.merge(user_info.to_db())
+                for stat in stats:
+                    if stat.pp == 0:
+                        continue
+                    stat.date = queue.date # meh
+                    session.merge(stat.to_db())
+                scores_count = session.query(DBScore).filter(
+                    DBScore.server == self.config.server_api.server_name,
+                    DBScore.mode == queue.mode,
+                    DBScore.relax == queue.relax,
+                    DBScore.user_id == queue.user_id,
+                    DBScore.completed == 3
+                ).count()
+                # Assume user never got fetched if scores are under 250
+                if scores_count < 250:
+                    page = 1
+                    while True:
+                        scores = self.config.server_api.get_user_best(
+                            user_id = queue.user_id,
+                            mode = queue.mode,
+                            relax = queue.relax,
+                            page = page
+                        )
+                        page += 1
+                        if not scores:
+                            break
+                        for score in scores:
+                            if not beatmaps.get_beatmap(score.beatmap_id):
+                                self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
+                            if not session.query(DBScore).filter(DBScore.id == score.id, DBScore.server == score.server).first():
+                                session.merge(score.to_db())
+                self.logger.info(f"Processed user {user_info.username} ({user_info.id})")
+                session.delete(queue)
+            session.commit()
+        return True
