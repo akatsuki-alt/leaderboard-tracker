@@ -176,6 +176,7 @@ class ProcessQueue(TrackerTask):
                         for score in scores:
                             if not beatmaps.get_beatmap(score.beatmap_id):
                                 self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
+                                continue
                             if not session.query(DBScore).filter(DBScore.id == score.id, DBScore.server == score.server).first():
                                 session.merge(score.to_db())
                 self.logger.info(f"Processed user {user_info.username} ({user_info.id})")
