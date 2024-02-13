@@ -1,4 +1,5 @@
 from common.database.objects import DBStatsCompact, DBUserQueue, DBUser, DBScore
+from common.performance import performance_systems
 from common.api.server_api import Stats, User
 from common.service import RepeatedTask
 from common.logging import get_logger
@@ -183,7 +184,32 @@ class ProcessQueue(TrackerTask):
                 session.delete(queue)
             session.commit()
         return True
-    
+
+class RecalculateScores(TrackerTask):
+    def __init__(self, config: TrackerConfig) -> None:
+        super().__init__("recalculate_scores", 60*60*48, config)
+
+    def run(self):
+        with app.database.session as session:
+            modes = [(0,0), (1,0), (2,0), (3,0)]
+            if self.config.server_api.supports_rx:
+                modes.extend(((0,1), (1,1), (2,1), (0,2))) 
+            for mode, relax in modes:
+                scores = session.query(DBScore).filter(
+                    DBScore.server == self.config.server_api.server_name,
+                    DBScore.mode == mode,
+                    DBScore.relax == relax,
+                    DBScore.pp_system != self.config.server_api.get_pp_system(mode, relax)
+                ).all()
+                for score in scores:
+                    new_value = performance_systems[self.config.server_api.server_name].calculate_db_score(score)
+                    if not new_value:
+                        continue
+                    self.logger.info(f"Recalculated score {score.id} {score.pp} -> {new_value}")
+                    score.pp_system = self.config.server_api.get_pp_system(mode, relax)
+                    score.pp = new_value
+                session.commit()
+
 def process_ban(server_api: ServerAPI, session: Session, user_id: int): 
     if server_api.ping_server():
         user = session.get(DBUser, (user_id, server_api.server_name))
