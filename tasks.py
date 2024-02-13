@@ -209,6 +209,7 @@ class RecalculateScores(TrackerTask):
                     score.pp_system = self.config.server_api.get_pp_system(mode, relax)
                     score.pp = new_value
                 session.commit()
+        return True
 
 def process_ban(server_api: ServerAPI, session: Session, user_id: int): 
     if server_api.ping_server():
