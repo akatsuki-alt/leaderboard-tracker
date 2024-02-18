@@ -1,9 +1,9 @@
-from common.database.objects import DBStatsCompact, DBUserQueue, DBUser, DBScore
 from common.performance import performance_systems
 from common.api.server_api import Stats, User
 from common.service import RepeatedTask
 from common.logging import get_logger
 from common.servers import ServerAPI
+from common.database.objects import *
 from common.events import *
 
 from sqlalchemy.orm import Session
@@ -208,6 +208,64 @@ class RecalculateScores(TrackerTask):
                     self.logger.info(f"Recalculated score {score.id} {score.pp} -> {new_value}")
                     score.pp_system = self.config.server_api.get_pp_system(mode, relax)
                     score.pp = new_value
+                session.commit()
+        return True
+
+class TrackClanLiveLeaderboard(TrackerTask):
+    
+    def __init__(self, config: TrackerConfig) -> None:
+        super().__init__("track_clan_leaderboard", 60*15, config)
+
+    def can_run(self) -> bool:
+        if not self.config.server_api.supports_clans:
+            return False
+        return super().can_run()
+
+    def run(self):
+        modes = [(0,0), (1,0), (2,0), (3,0)]
+        if self.config.server_api.supports_rx:
+            modes.extend(((0,1), (1,1), (2,1), (0,2)))
+        with app.database.session as session:
+            for mode, relax in modes:
+                clans = {}
+                page = 1
+                while True:
+                    lb = self.config.server_api.get_clan_leaderboard_1s(mode, relax, page, 100)
+                    if not lb:
+                        break
+                    for clan, stats in lb:
+                        if stats.first_places == 0:
+                            page = -1
+                            break
+                        clans[clan.id] = (clan, stats)
+                    if page == -1:
+                        break
+                    page += 1
+                page = 1
+                while True:
+                    lb = self.config.server_api.get_clan_leaderboard(mode, relax, page, 100)
+                    if not lb:
+                        break
+                    for clan, stats in lb:
+                        if clan.id in clans:
+                            stats.rank_1s = clans[clan.id][1].rank_1s
+                            stats.first_places = clans[clan.id][1].first_places
+                            clan.tag = clans[clan.id][0].tag
+                            del clans[clan.id]
+                        if (db_clan := session.get(DBClan, (clan.id, clan.server))):
+                            db_clan.name = clan.name
+                            if clan.tag:
+                                db_clan.tag = clan.tag
+                        else:
+                            session.add(DBClan(
+                                server = clan.server,
+                                name = clan.name,
+                                tag = clan.tag,
+                                id = clan.id
+                            ))
+                        session.merge(stats.to_db_compact())
+                    page += 1
+                # Maybe iterate remaining clans? Shouldnt matter iirc since no inactivity
                 session.commit()
         return True
 
