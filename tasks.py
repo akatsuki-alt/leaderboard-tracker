@@ -6,10 +6,10 @@ from common.servers import ServerAPI
 from common.database.objects import *
 from common.events import *
 
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from typing import List, Tuple
 from . import TrackerConfig
-from datetime import date
 
 import common.repos.beatmaps as beatmaps
 import common.app as app
@@ -27,6 +27,11 @@ class TrackLiveLeaderboard(TrackerTask):
     def __init__(self, config: TrackerConfig) -> None:
         super().__init__("live_lb_tracker", 60*15, config)
     
+    def can_run(self) -> bool:
+        if not self.config.server_api.supports_lb_tracking:
+            return False
+        return super().can_run()
+
     def run(self):
         modes = [(0,0), (1,0), (2,0), (3,0)]
         if self.config.server_api.supports_rx:
@@ -138,6 +143,11 @@ class ProcessQueue(TrackerTask):
     def __init__(self, config: TrackerConfig) -> None:
         super().__init__("process_queue", 60*15, config)
 
+    def can_run(self) -> bool:
+        if not self.config.server_api.supports_lb_tracking:
+            return False
+        return super().can_run()
+
     def run(self):
         with app.database.session as session:
             for queue in session.query(DBUserQueue).filter(DBUserQueue.server==self.config.server_api.server_name, DBUserQueue.date < date.today()):
@@ -217,7 +227,7 @@ class TrackClanLiveLeaderboard(TrackerTask):
         super().__init__("track_clan_leaderboard", 60*15, config)
 
     def can_run(self) -> bool:
-        if not self.config.server_api.supports_clans:
+        if not self.config.server_api.supports_clans or not self.config.server_api.supports_lb_tracking:
             return False
         return super().can_run()
 
@@ -267,6 +277,44 @@ class TrackClanLiveLeaderboard(TrackerTask):
                     page += 1
                 # Maybe iterate remaining clans? Shouldnt matter iirc since no inactivity
                 session.commit()
+        return True
+
+class TrackLinkedUserStats(TrackerTask):
+    
+    def __init__(self, config: TrackerConfig) -> None:
+        super().__init__("track_linked_users", 60*15, config)
+    
+    def can_run(self) -> bool:
+        # Ignore servers that automatically track stats
+        if self.config.server_api.supports_lb_tracking:
+            return False
+        return super().can_run()
+
+    def run(self):
+        server_name = self.config.server_api.server_name
+        yesterday = date.today() - timedelta(days = 1)
+        modes = [(0,0), (1,0), (2,0), (3,0)]
+        if self.config.server_api.supports_rx:
+            modes.extend(((0,1), (1,1), (2,1), (0,2)))
+        with app.database.session as session:
+            for link in session.query(DBBotLink):
+                if server_name not in link.links:
+                    continue
+                if session.query(DBStats).filter(
+                    DBStats.server == server_name,
+                    DBStats.user_id == link.links[server_name],
+                    DBStats.date == yesterday
+                ).count() > 0:
+                    continue
+                user, stats = self.config.server_api.get_user_info(link.links[server_name])
+                if not user:
+                    continue
+                session.merge(user.to_db())
+                for stat in stats:
+                    if not stat.pp:
+                        continue
+                    session.merge(stat.to_db())
+            session.commit()
         return True
 
 def process_ban(server_api: ServerAPI, session: Session, user_id: int): 

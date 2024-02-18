@@ -6,7 +6,7 @@ from . import TrackerConfig
 import common.servers as servers
 
 def build_tasks(config: TrackerConfig) -> List[Task]:
-    tasks = [TrackLiveLeaderboard(config), TrackClanLiveLeaderboard(config), ProcessQueue(config), RecalculateScores(config)]
+    tasks = [TrackLiveLeaderboard(config), TrackClanLiveLeaderboard(config), ProcessQueue(config), RecalculateScores(config), TrackLinkedUserStats(config)]
     tasks.extend(config.additional_tasks)
     return tasks
 
@@ -18,5 +18,6 @@ class ServerTracker(TaskedService):
 def get_services() -> List[TaskedService]:
     return [
         ServerTracker(TrackerConfig(server_api=servers.by_name("akatsuki"))),
-        ServerTracker(TrackerConfig(server_api=servers.by_name("titanic")))
+        ServerTracker(TrackerConfig(server_api=servers.by_name("titanic"))),
+        ServerTracker(TrackerConfig(server_api=servers.by_name("bancho")))
     ]
