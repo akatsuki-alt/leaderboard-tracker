@@ -36,7 +36,7 @@ class TrackLiveLeaderboard(TrackerTask):
         modes = [(0,0), (1,0), (2,0), (3,0)]
         if self.config.server_api.supports_rx:
             modes.extend(((0,1), (1,1), (2,1), (0,2)))
-        with app.database.session as session:
+        with app.database.managed_session() as session:
             users_updated = 0
             for mode, relax in modes:
                 old_lb = session.query(DBStatsCompact).filter(DBStatsCompact.server == self.config.server_api.server_name, DBStatsCompact.leaderboard_type == "pp", DBStatsCompact.mode == mode, DBStatsCompact.relax == relax).all()
@@ -163,7 +163,7 @@ class TrackGenericLeaderboard(TrackerTask):
         modes = [(0,0), (1,0), (2,0), (3,0)]
         if self.config.server_api.supports_rx:
             modes.extend(((0,1), (1,1), (2,1), (0,2)))
-        with app.database.session as session:
+        with app.database.managed_session() as session:
             for mode, relax in modes:
                 old_lb = session.query(DBStatsCompact).filter(DBStatsCompact.server == self.config.server_api.server_name, DBStatsCompact.leaderboard_type == self.leaderboard, DBStatsCompact.mode == mode, DBStatsCompact.relax == relax).all()
 
@@ -225,7 +225,7 @@ class ProcessQueue(TrackerTask):
         return super().can_run()
 
     def run(self):
-        with app.database.session as session:
+        with app.database.managed_session() as session:
             for queue in session.query(DBUserQueue).filter(DBUserQueue.server==self.config.server_api.server_name, DBUserQueue.date < date.today()):
                 user_info, stats = self.config.server_api.get_user_info(queue.user_id)
                 if not user_info or user_info.banned:
@@ -306,7 +306,7 @@ class RecalculateScores(TrackerTask):
         super().__init__("recalculate_scores", 60*60*48, config)
 
     def run(self):
-        with app.database.session as session:
+        with app.database.managed_session() as session:
             modes = [(0,0), (1,0), (2,0), (3,0)]
             if self.config.server_api.supports_rx:
                 modes.extend(((0,1), (1,1), (2,1), (0,2))) 
@@ -341,7 +341,7 @@ class TrackClanLiveLeaderboard(TrackerTask):
         modes = [(0,0), (1,0), (2,0), (3,0)]
         if self.config.server_api.supports_rx:
             modes.extend(((0,1), (1,1), (2,1), (0,2)))
-        with app.database.session as session:
+        with app.database.managed_session() as session:
             for mode, relax in modes:
                 clans = {}
                 page = 1
@@ -402,7 +402,7 @@ class TrackLinkedUserStats(TrackerTask):
         modes = [(0,0), (1,0), (2,0), (3,0)]
         if self.config.server_api.supports_rx:
             modes.extend(((0,1), (1,1), (2,1), (0,2)))
-        with app.database.session as session:
+        with app.database.managed_session() as session:
             for link in session.query(DBBotLink):
                 if server_name not in link.links:
                     continue
