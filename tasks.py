@@ -261,6 +261,26 @@ class ProcessQueue(TrackerTask):
                 if scores_count < 250:
                     page = 1
                     while True:
+                        most_played = self.config.server_api.get_user_most_played(
+                            user_id = queue.user_id,
+                            mode = queue.mode,
+                            relax = queue.relax,
+                            page = page
+                        )
+                        page += 1
+                        if not most_played:
+                            break
+                        for beatmap in most_played:
+                            if not beatmaps.get_beatmap(beatmap.beatmap_id):
+                                continue
+                            session.commit()
+                            session.flush()
+                            if (db_most_played := session.query(DBMapPlaycount).filter(DBMapPlaycount.user_id == queue.user_id, DBMapPlaycount.beatmap_id == beatmap.beatmap_id, DBMapPlaycount.server == self.config.server_api.server_name).first()):
+                                db_most_played.play_count += beatmap.play_count
+                            else:
+                                session.merge(beatmap.to_db())
+                    page = 1
+                    while True:
                         scores = self.config.server_api.get_user_best(
                             user_id = queue.user_id,
                             mode = queue.mode,
