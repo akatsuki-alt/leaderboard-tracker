@@ -116,6 +116,7 @@ class TrackLiveLeaderboard(TrackerTask):
             if not beatmaps.get_beatmap(score.beatmap_id):
                 self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
             else:
+                session.commit()
                 session.merge(score.to_db())
                 if score.completed > 2:
                     for db_score in session.query(DBScore).filter(
@@ -263,8 +264,38 @@ class ProcessQueue(TrackerTask):
                             if not beatmaps.get_beatmap(score.beatmap_id):
                                 self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
                                 continue
+                            session.commit()
+                            session.flush()
                             if not session.query(DBScore).filter(DBScore.id == score.id, DBScore.server == score.server).first():
                                 session.merge(score.to_db())
+                page = 1
+                while True:
+                    first_places, _ = self.config.server_api.get_user_1s(
+                        user_id = queue.user_id,
+                        mode = queue.mode,
+                        relax = queue.relax,
+                        page = page)
+                    if not first_places:
+                        break
+                    for first_place in first_places:
+                        if not session.query(DBScore).filter(DBScore.id == first_place.id, DBScore.server == first_place.server).first():
+                            if not beatmaps.get_beatmap(first_place.beatmap_id):
+                                self.logger.warning(f"Beatmap {first_place.beatmap_id} not found, can't store score {first_place.id}")
+                                continue
+                            else:
+                                session.commit()
+                                session.flush()
+                                session.merge(first_place.to_db())
+                        session.merge(DBFirstPlace(
+                            id=first_place.id,
+                            user_id=first_place.user_id,
+                            server=first_place.server,
+                            mode=first_place.mode,
+                            relax=first_place.relax,
+                            beatmap_id=first_place.beatmap_id,
+                            date=date.today()
+                        ))
+                    page += 1
                 self.logger.info(f"Processed user {user_info.username} ({user_info.id})")
                 session.delete(queue)
             session.commit()
