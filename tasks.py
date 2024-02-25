@@ -116,6 +116,15 @@ class TrackLiveLeaderboard(TrackerTask):
             if not beatmaps.get_beatmap(score.beatmap_id):
                 self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
             else:
+                if (db_most_played := session.get(DBMapPlaycount, (user.id, self.config.server_api.server_name, score.beatmap_id))):
+                    db_most_played.play_count += 1
+                else:
+                    session.merge(DBMapPlaycount(
+                        user_id = user.id,
+                        server = self.config.server_api.server_name,
+                        beatmap_id = score.beatmap_id,
+                        play_count = 1
+                    ))
                 session.commit()
                 session.merge(score.to_db())
                 if score.completed > 2:
@@ -131,6 +140,7 @@ class TrackLiveLeaderboard(TrackerTask):
                             continue
                         if db_score.completed == score.completed:
                             db_score.completed = 2
+                
         for hidden_score in session.query(DBScore).filter(
             DBScore.user_id == user.id,
             DBScore.server == user.server,
