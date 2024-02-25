@@ -1,5 +1,5 @@
 from common.performance import performance_systems
-from common.api.server_api import Stats, User
+from common.api.server_api import SortType, Stats, User
 from common.service import RepeatedTask
 from common.logging import get_logger
 from common.servers import ServerAPI
@@ -73,7 +73,7 @@ class TrackLiveLeaderboard(TrackerTask):
                             self.process_user_update(session, user, stats, mode, relax)
                             users_updated+=1
                     session.merge(stats.to_db_compact())
-                
+
                 missing_users = {k:v for k,v in old_lb_by_id.items() if k not in new_lb_by_id}
                 
                 for user in missing_users.values():
@@ -82,7 +82,7 @@ class TrackLiveLeaderboard(TrackerTask):
                         process_ban(self.config.server_api, session, user.id)
 
                 session.commit()
-        app.events.trigger(LeaderboardUpdateEvent(self.config.server_api.server_name, users_updated))
+        app.events.trigger(LeaderboardUpdateEvent(self.config.server_api.server_name, "pp", users_updated))
         return True
 
     def process_user_update(self, session: Session, user: User, stats: Stats, mode: int, relax: int) -> None:
@@ -137,7 +137,66 @@ class TrackLiveLeaderboard(TrackerTask):
         ))
 
         session.commit()
-        
+
+
+class TrackGenericLeaderboard(TrackerTask):
+
+    def __init__(self, leaderboard: str, config: TrackerConfig) -> None:
+        self.leaderboard = leaderboard
+        super().__init__(f"live_{leaderboard}_lb_tracker", 60*30, config)
+    
+    def can_run(self) -> bool:
+        if not self.config.server_api.supports_lb_tracking:
+            return False
+        return super().can_run()
+
+    def run(self):
+        modes = [(0,0), (1,0), (2,0), (3,0)]
+        if self.config.server_api.supports_rx:
+            modes.extend(((0,1), (1,1), (2,1), (0,2)))
+        with app.database.session as session:
+            for mode, relax in modes:
+                old_lb = session.query(DBStatsCompact).filter(DBStatsCompact.server == self.config.server_api.server_name, DBStatsCompact.leaderboard_type == self.leaderboard, DBStatsCompact.mode == mode, DBStatsCompact.relax == relax).all()
+
+                if old_lb:
+                    for object in old_lb:
+                        session.delete(object)
+
+                live_lb: List[Tuple[User, Stats]] = list()
+                page = 1
+
+                while True:
+                    try:
+                        lb = self.config.server_api.get_leaderboard(mode, relax, page=page, length=500, sort=self.leaderboard)
+                        if not lb:
+                            break
+                        for user,stats in lb:
+                            if not stats.global_rank or not stats.pp:
+                                break
+                            live_lb.append((user, stats))
+                        else:
+                            page += 1
+                            continue
+                        break
+                    except Exception:
+                        self.logger.error(f"An error occurred while trying to fetch leaderboard!", exc_info=True)
+                        return False
+                for user, stats in live_lb:
+                    session.merge(stats.to_db_compact())
+                # Fix country rank
+                countries = {}
+                for user in session.query(DBStatsCompact).filter(DBStatsCompact.server == self.config.server_api.server_name, DBStatsCompact.leaderboard_type == self.leaderboard, DBStatsCompact.mode == mode, DBStatsCompact.relax == relax).order_by(DBStatsCompact.global_rank.desc()):
+                    if (dbuser := session.query(DBUser).filter(DBUser.id == user.id).first()):
+                        if dbuser.country in countries:
+                            countries[dbuser.country] += 1
+                        else:
+                            countries[dbuser.country] = 1
+                        user.country_rank = countries[dbuser.country]
+                session.commit()
+
+        app.events.trigger(LeaderboardUpdateEvent(self.config.server_api.server_name, self.leaderboard, 0))
+        return True
+
 class ProcessQueue(TrackerTask):
     
     def __init__(self, config: TrackerConfig) -> None:

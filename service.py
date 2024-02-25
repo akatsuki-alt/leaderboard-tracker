@@ -6,7 +6,7 @@ from . import TrackerConfig
 import common.servers as servers
 
 def build_tasks(config: TrackerConfig) -> List[Task]:
-    tasks = [TrackLiveLeaderboard(config), TrackClanLiveLeaderboard(config), ProcessQueue(config), RecalculateScores(config), TrackLinkedUserStats(config)]
+    tasks = [TrackLiveLeaderboard(config), TrackClanLiveLeaderboard(config), ProcessQueue(config), RecalculateScores(config), TrackLinkedUserStats(config), TrackGenericLeaderboard('score', config)]
     tasks.extend(config.additional_tasks)
     return tasks
 
