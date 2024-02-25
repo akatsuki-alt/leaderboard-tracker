@@ -72,6 +72,14 @@ class TrackLiveLeaderboard(TrackerTask):
                         if old_lb_by_id[user.id].play_count != stats.play_count:
                             self.process_user_update(session, user, stats, mode, relax)
                             users_updated+=1
+                    if (dbuser := session.get(DBUser, (user.id, user.server))):
+                        if dbuser.username != user.username: # maybe rename event?
+                            dbuser.username_history.append(dbuser.username)
+                            dbuser.username = user.username
+                        dbuser.latest_activity = user.latest_activity
+                        dbuser.country = user.country # just in case
+                    else:
+                        session.merge(user.to_db())
                     session.merge(stats.to_db_compact())
 
                 missing_users = {k:v for k,v in old_lb_by_id.items() if k not in new_lb_by_id}
@@ -182,6 +190,14 @@ class TrackGenericLeaderboard(TrackerTask):
                         self.logger.error(f"An error occurred while trying to fetch leaderboard!", exc_info=True)
                         return False
                 for user, stats in live_lb:
+                    if (dbuser := session.get(DBUser, (user.id, user.server))):
+                        if dbuser.username != user.username: # maybe rename event?
+                            dbuser.username_history.append(dbuser.username)
+                            dbuser.username = user.username
+                        dbuser.latest_activity = user.latest_activity
+                        dbuser.country = user.country # just in case
+                    else:
+                        session.merge(user.to_db())
                     session.merge(stats.to_db_compact())
                 # Fix country rank
                 countries = {}
