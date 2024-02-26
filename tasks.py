@@ -1,6 +1,7 @@
+from common.service import RepeatedTask, ScheduledTask
+
 from common.performance import performance_systems
-from common.api.server_api import SortType, Stats, User
-from common.service import RepeatedTask
+from common.api.server_api import Stats, User
 from common.logging import get_logger
 from common.servers import ServerAPI
 from common.database.objects import *
@@ -8,6 +9,8 @@ from common.events import *
 
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
+from common.utils import Schedule
+
 from typing import List, Tuple
 from . import TrackerConfig
 
@@ -20,6 +23,14 @@ class TrackerTask(RepeatedTask):
         self.config = config
         self.logger = get_logger(f"{config.server_api.server_name}_{task_name}")
         super().__init__(f"{config.server_api.server_name}_{task_name}", interval)
+
+
+class ScheduledTrackerTask(ScheduledTask):
+    
+    def __init__(self, task_name: str, schedule: Schedule, config: TrackerConfig) -> None:
+        self.config = config
+        self.logger = get_logger(f"{config.server_api.server_name}_{task_name}")
+        super().__init__(f"{config.server_api.server_name}_{task_name}", schedule)
 
 
 class TrackLiveLeaderboard(TrackerTask):
@@ -443,6 +454,42 @@ class AutoqueueLinkedUsers(TrackerTask):
                 session.commit()
                 self.logger.info(f"Autoqueued user {link.links[server]}")
         return True
+
+class UpdateOldStats(ScheduledTrackerTask):
+    
+    def __init__(self, config: TrackerConfig):
+        super().__init__("update_old_stats", Schedule(2, 0, 0), config)
+    
+    def can_run(self) -> bool:
+        if not self.config.server_api.supports_lb_tracking:
+            return False
+        return super().can_run()
+    
+    def run(self):
+        server = self.config.server_api.server_name
+        updated = 0
+        with app.database.managed_session() as session:
+            old = session.query(DBStats).filter(
+                DBStats.date == date.today() - timedelta(days = 1),
+                DBStats.server == server
+            )
+            for old_stats in old:
+                if session.get(DBStats, (server, old_stats.user_id, old_stats.mode, old_stats.relax, date.today())):
+                    continue
+                live_pp = session.get(DBStatsCompact, (old_stats.user_id, server, "pp", old_stats.mode, old_stats.relax))
+                live_score = session.get(DBStatsCompact, (old_stats.user_id, server, "pp", old_stats.mode, old_stats.relax))
+                global_rank, country_rank, score_rank, country_score_rank = 0,0,0,0
+                if live_pp:
+                    global_rank = live_pp.global_rank
+                    country_rank = live_pp.country_rank
+                if live_score:
+                    score_rank = live_score.global_rank
+                    country_score_rank = live_score.country_rank
+                session.add(old_stats.update(date.today(), global_rank, country_rank, score_rank, country_score_rank))
+                session.commit()
+                updated += 1
+        self.logger.info(f"Updated {updated} old stats".format(updated))
+        return True
     
 class TrackLinkedUserStats(TrackerTask):
     
@@ -481,6 +528,7 @@ class TrackLinkedUserStats(TrackerTask):
                     session.merge(stat.to_db())
             session.commit()
         return True
+
 
 def process_ban(server_api: ServerAPI, session: Session, user_id: int): 
     if server_api.ping_server():
