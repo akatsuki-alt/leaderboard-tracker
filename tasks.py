@@ -573,6 +573,44 @@ class TrackLinkedUserStats(TrackerTask):
             session.commit()
         return True
 
+class TrackAkatLovedMapsScores(TrackerTask):
+    
+    def __init__(self, config: TrackerConfig) -> None:
+        super().__init__("track_loved_maps", 60*15, config)
+
+    def can_run(self) -> bool:
+        if self.config.server_api.server_name != "akatsuki":
+            return False
+        return super().can_run()
+
+    def run(self):
+        modes = [(0,0), (1,0), (2,0), (3,0), (0,1), (1,1), (2,1), (0,2)]
+        processed = 0
+        with app.database.managed_session() as session:
+            for beatmap in session.query(DBBeatmap).filter(
+                DBBeatmap.status['akatsuki'].astext.cast(Integer) == 4
+            ):
+                if session.get(DBAkatsukiLovedMap, beatmap.id):
+                    continue
+                for mode, relax in modes:
+                    page = 1
+                    while True:
+                        scores = self.config.server_api.get_map_scores(beatmap.id, mode, relax, page)
+                        if not scores:
+                            break
+                        for score in scores:
+                            session.merge(score.to_db())
+                        if len(scores) != 100:
+                            break
+                        page += 1
+                session.add(DBAkatsukiLovedMap(beatmap_id = beatmap.id))
+                session.commit()
+                processed += 1
+                self.logger.info(f"Processed {beatmap.id}")
+                if processed > 200:
+                    self.logger.info(f"Reached limit of loved maps to process")
+                    break
+        return True
 
 def process_ban(server_api: ServerAPI, session: Session, user_id: int): 
     if server_api.ping_server():
