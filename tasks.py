@@ -118,13 +118,25 @@ class TrackLiveLeaderboard(TrackerTask):
             session.merge(stats.to_db())
         session.merge(user_full.to_db())
 
+        is_akatsuki = user.server == self.config.server_api.server_name and relax > 0
+        if is_akatsuki: # calc rx playtime from scratch cuz broken
+            playtime = session.get(DBAkatsukiPlaytime, (user.id, mode, relax))
+            if not playtime:
+                playtime = DBAkatsukiPlaytime(
+                    user_id = user.id,
+                    mode = mode,
+                    relax = relax,
+                    playtime = 0
+                )
+                session.add(playtime)
+
         for score in self.config.server_api.get_user_recent(user.id, mode, relax):
             if session.query(DBScore).filter(
                 DBScore.id == score.id, 
                 DBScore.server == self.config.server_api.server_name
             ).first():
                 break
-            if not beatmaps.get_beatmap(score.beatmap_id):
+            if not (dbmap := beatmaps.get_beatmap(score.beatmap_id)):
                 self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
             else:
                 if (db_most_played := session.get(DBMapPlaycount, (user.id, self.config.server_api.server_name, score.beatmap_id))):
@@ -138,6 +150,14 @@ class TrackLiveLeaderboard(TrackerTask):
                     ))
                 session.commit()
                 session.merge(score.to_db())
+
+                if is_akatsuki:
+                    divisor = 1.5 if score.mods & 64 else 0.75 if score.mods & 256 else 1 # HT/DT
+                    if score.completed > 1:
+                        playtime.playtime += dbmap.hit_length / divisor
+                    else:
+                        playtime.playtime += (dbmap.hit_length / (score.get_total_hits()/dbmap.get_total_hits())) / divisor
+
                 if score.completed > 2:
                     for db_score in session.query(DBScore).filter(
                         DBScore.beatmap_id == score.beatmap_id, 
@@ -248,6 +268,7 @@ class ProcessQueue(TrackerTask):
     def run(self):
         with app.database.managed_session() as session:
             for queue in session.query(DBUserQueue).filter(DBUserQueue.server==self.config.server_api.server_name, DBUserQueue.date < date.today()):
+                is_akatsuki = self.config.server_api.server_name == "akatsuki" and queue.relax > 0 # recalculate rx playtime cuz broken...
                 user_info, stats = self.config.server_api.get_user_info(queue.user_id)
                 if not user_info or user_info.banned:
                     if self.config.server_api.ping_server():
@@ -281,11 +302,23 @@ class ProcessQueue(TrackerTask):
                         page += 1
                         if not most_played:
                             break
+                        if is_akatsuki:
+                            playtime = session.get(DBAkatsukiPlaytime, (queue.user_id, queue.mode, queue.relax))
+                            if not playtime:
+                                playtime = DBAkatsukiPlaytime(
+                                    user_id = queue.user_id,
+                                    mode = queue.mode,
+                                    relax = queue.relax,
+                                    playtime = 0
+                                )
+                                session.add(playtime)
                         for beatmap in most_played:
-                            if not beatmaps.get_beatmap(beatmap.beatmap_id):
+                            if not (dbmap := beatmaps.get_beatmap(beatmap.beatmap_id)):
                                 continue
                             session.commit()
                             session.flush()
+                            if is_akatsuki:
+                                playtime.playtime += (dbmap.hit_length / (dbmap.get_total_hits() / 33.33)) * beatmap.play_count
                             if (db_most_played := session.query(DBMapPlaycount).filter(DBMapPlaycount.user_id == queue.user_id, DBMapPlaycount.beatmap_id == beatmap.beatmap_id, DBMapPlaycount.server == self.config.server_api.server_name).first()):
                                 db_most_played.play_count += beatmap.play_count
                             else:
@@ -302,13 +335,21 @@ class ProcessQueue(TrackerTask):
                         if not scores:
                             break
                         for score in scores:
-                            if not beatmaps.get_beatmap(score.beatmap_id):
+                            if not (dbmap := beatmaps.get_beatmap(score.beatmap_id)):
                                 self.logger.warning(f"Beatmap {score.beatmap_id} not found, can't store score {score.id}")
                                 continue
                             session.commit()
                             session.flush()
+
                             if not session.query(DBScore).filter(DBScore.id == score.id, DBScore.server == score.server).first():
+                                if is_akatsuki:
+                                    divisor = 1.5 if score.mods & 64 else 0.75 if score.mods & 256 else 1 # HT/DT
+                                    if score.completed > 1:
+                                        playtime.playtime += dbmap.hit_length / divisor
+                                    else:
+                                        playtime.playtime += (dbmap.hit_length / (score.get_total_hits()/dbmap.get_total_hits())) / divisor
                                 session.merge(score.to_db())
+
                 page = 1
                 while True:
                     first_places, _ = self.config.server_api.get_user_1s(
