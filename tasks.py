@@ -415,6 +415,35 @@ class TrackClanLiveLeaderboard(TrackerTask):
                 session.commit()
         return True
 
+class AutoqueueLinkedUsers(TrackerTask):
+    
+    def __init__(self, config:TrackerConfig):
+        super().__init__("autoqueue_linked_users", 60*60, config)
+    
+    def can_run(self) -> bool:
+        if not self.config.server_api.supports_lb_tracking:
+            return False
+        return super().can_run()
+    
+    def run(self):
+        server = self.config.server_api.server_name
+        with app.database.managed_session() as session:
+            for link in session.query(DBBotLink):
+                if server not in link.links:
+                    continue
+                if session.get(DBUserQueue, (link.links[server], server, link.default_mode, link.default_relax, date.today())):
+                    continue
+                session.add(DBUserQueue(
+                    user_id = link.links[server],
+                    server = server,
+                    mode = link.default_mode,
+                    relax = link.default_relax,
+                    date = date.today()
+                ))
+                session.commit()
+                self.logger.info(f"Autoqueued user {link.links[server]}")
+        return True
+    
 class TrackLinkedUserStats(TrackerTask):
     
     def __init__(self, config: TrackerConfig) -> None:
