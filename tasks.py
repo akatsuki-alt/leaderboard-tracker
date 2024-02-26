@@ -105,7 +105,7 @@ class TrackLiveLeaderboard(TrackerTask):
         return True
 
     def process_user_update(self, session: Session, user: User, stats: Stats, mode: int, relax: int) -> None:
-        user_full, stats_full = self.config.server_api.get_user_info(user.id)
+        user_full, stats_full = self.config.server_api.get_user_info(user.id, mode, relax)
 
         if not user_full or not stats_full:
             return
