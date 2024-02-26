@@ -117,6 +117,7 @@ class TrackLiveLeaderboard(TrackerTask):
                 continue
             session.merge(stats.to_db())
         session.merge(user_full.to_db())
+        self.logger.info(f"Processing user {user.username} ({user.id})")
 
         is_akatsuki = user.server == self.config.server_api.server_name and relax > 0
         if is_akatsuki: # calc rx playtime from scratch cuz broken
@@ -185,6 +186,7 @@ class TrackLiveLeaderboard(TrackerTask):
             relax = relax,
             date = date.today()
         ))
+        self.logger.info(f"Processed user {user.username} ({user.id})")
 
         session.commit()
 
@@ -276,6 +278,7 @@ class ProcessQueue(TrackerTask):
                     else:
                         self.logger.warning("Server down?")
                     continue
+                self.logger.info(f"Processing user {user_info.username} ({user_info.id})")
                 session.merge(user_info.to_db())
                 for stat in stats:
                     if stat.pp == 0:
